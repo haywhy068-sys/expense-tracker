@@ -1,45 +1,47 @@
 import logging
 import secrets
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify
 from flask_cors import CORS
-from sqlalchemy import event
-from sqlalchemy.engine import Engine
 from werkzeug.exceptions import HTTPException
 
 from .config import Config
 from .extensions import db, jwt
 
-
-@event.listens_for(Engine, "connect")
-def _sqlite_fk_on(dbapi_conn, _record):
-    """SQLite ignores foreign keys unless asked; turn enforcement on."""
-    if dbapi_conn.__class__.__module__.startswith("sqlite3"):
-        dbapi_conn.execute("PRAGMA foreign_keys=ON")
-
-
-log = logging.getLogger("expense_app")
-DEV_FALLBACK_NOTE = "JWT_SECRET_KEY is not set: using a random key for this run. Everyone is signed out on restart."
+log = logging.getLogger("expense_api")
 
 
 def _check_config(app):
-    """Fail fast on unsafe production config instead of silently using defaults."""
-    cfg, env = app.config, app.config["APP_ENV"]
+    """Fail fast with a readable message instead of a 100-line traceback or an unsafe default."""
+    cfg = app.config
+    if not cfg.get("SQLALCHEMY_DATABASE_URI"):
+        raise RuntimeError("DATABASE_URL is missing or not a Postgres URL. Set it to your Supabase "
+                           "Session pooler URI: postgresql://postgres.<ref>:<password>@<host>:5432/postgres?sslmode=require")
     secret = cfg.get("JWT_SECRET_KEY")
-    if env == "production":
-        problems = []
-        if not secret:
-            problems.append("JWT_SECRET_KEY is not set")
-        elif len(secret) < 32:
-            problems.append("JWT_SECRET_KEY must be at least 32 characters")
-        if not cfg.get("DATABASE_URL_SET"):
-            problems.append("DATABASE_URL is not set (refusing to fall back to a local SQLite file)")
-        if problems:
-            raise RuntimeError("Unsafe production config: " + "; ".join(problems))
+    if cfg["APP_ENV"] == "production":
+        if not secret or len(secret) < 32:
+            raise RuntimeError("JWT_SECRET_KEY must be set and at least 32 characters in production.")
     elif not secret:
         # Random per run, never a value written in the code (a known key lets anyone forge tokens).
         cfg["JWT_SECRET_KEY"] = cfg["SECRET_KEY"] = secrets.token_urlsafe(48)
-        log.warning(DEV_FALLBACK_NOTE)
+        log.warning("JWT_SECRET_KEY is not set: using a random key for this run. Everyone is signed out on restart.")
+
+
+def _prepare_database(app):
+    """Create missing tables, then enable Row Level Security on each one.
+    Supabase exposes the public schema through its Data API; RLS with no policies blocks that API
+    entirely. This app connects as the table owner (`postgres`), which bypasses RLS, so it is unaffected."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
+    try:
+        db.create_all()
+        with db.engine.begin() as conn:
+            for table in db.metadata.sorted_tables:
+                conn.execute(text(f'ALTER TABLE "{table.name}" ENABLE ROW LEVEL SECURITY'))
+    except OperationalError as e:
+        reason = str(e.orig).splitlines()[0] if e.orig else str(e)
+        raise RuntimeError(f"Could not connect to the database: {reason}. Check DATABASE_URL "
+                           "(Session pooler URI, database password, ?sslmode=require).") from None
 
 
 def create_app(config_class=Config):
@@ -54,23 +56,20 @@ def create_app(config_class=Config):
          expose_headers=["Content-Disposition"],  # lets the frontend read the CSV filename
          methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 
-    from . import auth, budgets, categories, expenses, reports, workspaces
-    for module in (auth, workspaces, categories, expenses, budgets, reports):
+    from . import auth, budgets, categories, expenses, health, reports, workspaces
+    for module in (health, auth, workspaces, categories, expenses, budgets, reports):
         app.register_blueprint(module.bp)
-
-    @app.get("/api/health")
-    def health():
-        return jsonify(status="ok")
-
-    @app.get("/")
-    def dashboard():
-        return render_template("index.html")
 
     @app.errorhandler(HTTPException)
     def http_error(e):
         if e.response is not None:  # already a JSON response from validation.fail()
             return e.response
         return jsonify(error=e.description), e.code
+
+    @app.errorhandler(Exception)
+    def unexpected_error(e):
+        log.exception("Unhandled error")  # full detail in the server log, never sent to the client
+        return jsonify(error="Internal server error"), 500
 
     @jwt.unauthorized_loader
     @jwt.invalid_token_loader
@@ -86,8 +85,8 @@ def create_app(config_class=Config):
         return jsonify(error="Token expired, please log in again"), 401
 
     with app.app_context():
-        db.create_all()
-        app.config["DATABASE_DISPLAY"] = db.engine.url.render_as_string(hide_password=True)
+        _prepare_database(app)
+        shown = db.engine.url.render_as_string(hide_password=True)
     if app.config["APP_ENV"] != "test":
-        log.warning("Database: %s", app.config["DATABASE_DISPLAY"])
+        log.warning("Database: %s", shown)
     return app

@@ -26,7 +26,7 @@ def _clean_name(data):
     return name
 
 
-def _clean_color(data, default):    #check what this code does"!
+def _clean_color(data, default):
     color = data.get("color", default)
     if not HEX_RE.match(str(color)):
         fail("color must be a hex value like #2a78d6")
@@ -98,3 +98,4 @@ def delete_category(category_id):
     db.session.delete(cat)
     db.session.commit()
     return "", 204
+
