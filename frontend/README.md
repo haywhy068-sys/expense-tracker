@@ -26,7 +26,7 @@ npm run dev
 
 Open the URL printed by Vite (normally `http://localhost:5173`). On Windows, copy `.env.example` to `.env` with File Explorer or PowerShell `Copy-Item .env.example .env`.
 
-`VITE_API_URL` sets the Flask API origin, for example `http://localhost:5000`. **Do not append `/api`**. The client includes `/api` in every route. An empty value sends requests to the frontend's own origin. During Vite development, the included proxy forwards `/api` to `http://127.0.0.1:5000`. In production, an empty value requires an API reverse proxy. Restart Vite after changes. Vite embeds environment values in the compiled assets, so they are public configuration and must never contain secrets.
+`VITE_API_URL` sets the API base URL and defaults to `/api`. For a separate backend origin use `http://localhost:5000/api` or `https://api.example.com/api`. Existing origin-only values such as `http://localhost:5000` also remain supported. The client prevents a duplicate `/api` prefix. An unset or empty value uses `/api` on the frontend origin. During Vite development, the included proxy forwards `/api` to `http://127.0.0.1:5000`. In production, `/api` requires the deployment ingress/reverse proxy to route `/api/*` to Flask on port 5000. The included Nginx configuration serves the frontend only; DevOps must configure that API routing or supply a separate API URL. Restart Vite after changes. Vite embeds environment values in the compiled assets, so they are public configuration and must never contain secrets.
 
 `VITE_CURRENCY` sets the display currency, default `NGN`. Amounts are the API's major units (e.g. `120.50`), not integer cents. The frontend converts to cents only for accurate arithmetic. The supplied expense contract has no currency field, so one backend ledger must use a single agreed currency. Changing the display setting does not convert values. Multiple currencies require an additional agreed backend contract.
 
@@ -39,7 +39,7 @@ npm run preview
 ## Docker
 
 ```bash
-docker build --build-arg VITE_API_URL=https://api.example.com --build-arg VITE_CURRENCY=NGN -t spend-wise-frontend .
+docker build --build-arg VITE_API_URL=https://api.example.com/api --build-arg VITE_CURRENCY=NGN -t spend-wise-frontend .
 docker run --rm -p 8080:80 spend-wise-frontend
 ```
 

@@ -11,3 +11,14 @@ test('auth/CRUD/filter contract, bearer header and expired-session recovery',asy
  status=401;payload={error:'Expired'};await assert.rejects(()=>api.listExpenses({}),/session expired/);assert.equal(expired,1);status=200;payload=[];await api.listExpenses({category:'All'});assert.equal(calls.at(-1).headers.get('Authorization'),null);payload={expenses:[]};await assert.rejects(()=>api.listExpenses({}),/JSON array/);
  }finally{globalThis.fetch=old;}
 });
+
+test('API URL supports the /api default, API bases and legacy origins without duplicate prefixes',async()=>{
+ const raw=await fs.readFile(new URL('../src/api.ts',import.meta.url),'utf8');const old=globalThis.fetch;
+ try{for(const [configured,expected] of [[undefined,'/api/auth/login'],['/api','/api/auth/login'],['/api/','/api/auth/login'],['https://example.test/api/','https://example.test/api/auth/login'],['https://example.test','https://example.test/api/auth/login']]){
+  const source=raw.replace('import.meta.env.VITE_API_URL',JSON.stringify(configured)||'undefined').replace("import {mockRequest} from './mock';",'const mockRequest=()=>{};').replace("import.meta.env.DEV && import.meta.env.VITE_MOCK_API==='true'",'false');
+  const code=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+  const api=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));let actual;
+  globalThis.fetch=async(url)=>{actual=url;return new Response(JSON.stringify({token:'test',user:{id:1,email:'sample@example.test'}}));};
+  await api.authenticate('login','sample@example.test','sample');assert.equal(actual,expected);
+ }}finally{globalThis.fetch=old;}
+});
