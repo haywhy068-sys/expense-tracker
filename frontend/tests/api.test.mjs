@@ -1,0 +1,24 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs/promises';import ts from 'typescript';
+test('auth/CRUD/filter contract, bearer header and expired-session recovery',async()=>{
+ const source=(await fs.readFile(new URL('../src/api.ts',import.meta.url),'utf8')).replace("import.meta.env.VITE_API_URL","'https://api.example.test'").replace("import {mockRequest} from './mock';","const mockRequest=()=>{throw Error('Mock must stay off in this test')};").replace("import.meta.env.DEV && import.meta.env.VITE_MOCK_API==='true'","false");
+ const code=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+ const api=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));const old=globalThis.fetch;const calls=[];let status=200,payload=null;
+ globalThis.fetch=async(url,options)=>{calls.push({url,method:options.method||'GET',headers:new Headers(options.headers),body:options.body?JSON.parse(options.body):undefined});return new Response(status===204?null:JSON.stringify(payload),{status,headers:{'Content-Type':'application/json'}});};
+ try{payload={token:'fixture-token',user:{id:1,email:'sample@example.test'}};
+ for(const mode of ['register','login']){await api.authenticate(mode,'sample@example.test','fixture-value');const c=calls.at(-1);assert.equal(c.url,`https://api.example.test/api/auth/${mode}`);assert.deepEqual(c.body,{email:'sample@example.test',password:'fixture-value'});assert.equal(c.headers.get('Authorization'),null);}
+ let expired=0;api.setSession('fixture-token',()=>expired++);payload=[];await api.listExpenses({category:'Food',start_date:'2026-10-01',end_date:'2026-10-05'});assert.equal(calls.at(-1).url,'https://api.example.test/api/expenses?category=Food&start_date=2026-10-01&end_date=2026-10-05');assert.equal(calls.at(-1).headers.get('Authorization'),'Bearer fixture-token');
+ const expense={date:'2026-10-05',category:'Food',description:'Groceries',amount:120.5};payload={id:1,...expense};await api.createExpense(expense);assert.deepEqual(calls.at(-1).body,expense);assert.equal(calls.at(-1).method,'POST');await api.updateExpense(1,expense);assert.equal(calls.at(-1).method,'PUT');assert.equal(calls.at(-1).url,'https://api.example.test/api/expenses/1');status=204;await api.deleteExpense(1);assert.equal(calls.at(-1).method,'DELETE');
+ status=401;payload={error:'Expired'};await assert.rejects(()=>api.listExpenses({}),/session expired/);assert.equal(expired,1);status=200;payload=[];await api.listExpenses({category:'All'});assert.equal(calls.at(-1).headers.get('Authorization'),null);payload={expenses:[]};await assert.rejects(()=>api.listExpenses({}),/JSON array/);
+ }finally{globalThis.fetch=old;}
+});
+
+test('API URL supports the /api default, API bases and legacy origins without duplicate prefixes',async()=>{
+ const raw=await fs.readFile(new URL('../src/api.ts',import.meta.url),'utf8');const old=globalThis.fetch;
+ try{for(const [configured,expected] of [[undefined,'/api/auth/login'],['/api','/api/auth/login'],['/api/','/api/auth/login'],['https://example.test/api/','https://example.test/api/auth/login'],['https://example.test','https://example.test/api/auth/login']]){
+  const source=raw.replace('import.meta.env.VITE_API_URL',JSON.stringify(configured)||'undefined').replace("import {mockRequest} from './mock';",'const mockRequest=()=>{};').replace("import.meta.env.DEV && import.meta.env.VITE_MOCK_API==='true'",'false');
+  const code=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+  const api=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));let actual;
+  globalThis.fetch=async(url)=>{actual=url;return new Response(JSON.stringify({token:'test',user:{id:1,email:'sample@example.test'}}));};
+  await api.authenticate('login','sample@example.test','sample');assert.equal(actual,expected);
+ }}finally{globalThis.fetch=old;}
+});
