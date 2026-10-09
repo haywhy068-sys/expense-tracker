@@ -1,110 +1,63 @@
-import re
 
-from flask import Blueprint, jsonify, request
-from flask_jwt_extended import create_access_token, get_jwt, get_jwt_identity, jwt_required
+import base64
+import hashlib
 
-from .extensions import db, jwt
-from .models import RevokedToken, User
-from .validation import fail, require_json
+import bcrypt
+from flask import Blueprint, jsonify
+from flask_jwt_extended import create_access_token, get_jwt_identity
+
+from . import validation as v
+from .extensions import db
+from .models import User
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _prehash(password: str) -> bytes:
+    # bcrypt only reads the first 72 bytes, but the contract allows 128 characters (up to 512 bytes in UTF-8).
+    # SHA-256 first, so every character counts; base64 so there are no NUL bytes for bcrypt to stop at.
+    return base64.b64encode(hashlib.sha256(password.encode("utf-8")).digest())
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(_prehash(password), bcrypt.gensalt()).decode()
+
+
+def check_password(password: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(_prehash(password), hashed.encode())
+    except ValueError:
+        return False
 
 
 def current_user_id() -> int:
     return int(get_jwt_identity())
 
 
-@jwt.token_in_blocklist_loader
-def _is_revoked(_header, payload):
-    return db.session.get(RevokedToken, payload["jti"]) is not None
-
-
-def _session(user):
-    from .models import Membership, Workspace
-    personal = (Membership.query.filter_by(user_id=user.id).join(Workspace)
-                .filter(Workspace.kind == "personal").first())
-    return {"user": user.to_dict(), "access_token": create_access_token(identity=str(user.id)),
-            "default_workspace_id": personal.workspace_id if personal else None}
-
-
-def _valid_password(pw, field="password"):
-    if len(pw) < 8:
-        fail(f"{field} must be at least 8 characters")
-    return pw
+def _session(user, status):
+    return jsonify(token=create_access_token(identity=str(user.id)), user=user.to_dict()), status
 
 
 @bp.post("/register")
 def register():
-    from .workspaces import create_workspace  # local import avoids a circular import
-    data = require_json(request)
-    email = str(data.get("email", "")).strip().lower()
-    password = _valid_password(str(data.get("password", "")))
-    if not EMAIL_RE.match(email):
-        fail("A valid email is required")
-    name = str(data.get("name") or email.split("@")[0]).strip()[:80]
+    data = v.json_body()
+    email = v.email(data.get("email"))
+    password = v.password(data.get("password"))
     if User.query.filter_by(email=email).first():
-        fail("An account with this email already exists", 409)
-
-    user = User(email=email, name=name)
-    user.set_password(password)
+        v.fail("Email already registered", 409)
+    user = User(email=email, password_hash=hash_password(password))
     db.session.add(user)
-    db.session.flush()
-    create_workspace(user.id, "Personal", "personal")
     db.session.commit()
-    return jsonify(_session(user)), 201
+    return _session(user, 201)
 
 
 @bp.post("/login")
 def login():
-    data = require_json(request)
-    user = User.query.filter_by(email=str(data.get("email", "")).strip().lower()).first()
-    # Same message for unknown email and wrong password: don't leak which accounts exist.
-    if not user or not user.check_password(str(data.get("password", ""))):
-        fail("Invalid email or password", 401)
-    return jsonify(_session(user))
-
-
-@bp.post("/logout")
-@jwt_required()
-def logout():
-    db.session.add(RevokedToken(jti=get_jwt()["jti"]))
-    db.session.commit()
-    return "", 204
-
-
-def _me():
-    user = db.session.get(User, current_user_id())
-    if not user:
-        fail("User not found", 404)
-    return user
-
-
-@bp.get("/me")
-@jwt_required()
-def me():
-    return jsonify(user=_me().to_dict())
-
-
-@bp.patch("/me")
-@jwt_required()
-def update_me():
-    user = _me()
-    name = str(require_json(request).get("name", "")).strip()
-    if not 1 <= len(name) <= 80:
-        fail("name must be 1-80 characters")
-    user.name = name
-    db.session.commit()
-    return jsonify(user=user.to_dict())
-
-
-@bp.post("/password")
-@jwt_required()
-def change_password():
-    user = _me()
-    data = require_json(request)
-    if not user.check_password(str(data.get("current_password", ""))):
-        fail("Current password is incorrect", 401)
-    user.set_password(_valid_password(str(data.get("new_password", "")), "new_password"))
-    db.session.commit()
-    return "", 204
+    data = v.json_body()
+    email = data.get("email")
+    password = data.get("password")
+    user = User.query.filter_by(email=email.strip().lower()).first() if isinstance(email, str) else None
+    # One message for unknown email and wrong password, so accounts can't be probed.
+    if not user or not isinstance(password, str) or not check_password(password, user.password_hash):
+        v.fail("Invalid email or password", 401)
+    return _session(user, 200)

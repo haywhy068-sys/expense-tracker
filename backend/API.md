@@ -1,106 +1,62 @@
-# Spend-wise API contract
+# SpendWise API
 
-Base URL (dev): `http://127.0.0.1:5000/api`. Health check: `GET /health` (no auth; `200` healthy, `503` if the database is down). Frontend origin allowed by default: `http://localhost:5173`
-(change with the `CORS_ORIGINS` env var, comma-separated).
+Implements **API Contract v1.0** (7 October 2026). The contract is the source of truth; this page only adds the
+decisions the contract leaves open (marked **Clarification**) so frontend and backend agree on them too.
 
-**Every request except register, login and health** sends:
+## Rules
 
-```
-Authorization: Bearer <access_token>
-X-Workspace-Id: <id>      // optional; omitted = the user's Personal workspace
-Content-Type: application/json
-```
-
-Money is always a **decimal string** (`"57600.00"`), never a float. Dates are `YYYY-MM-DD`, months `YYYY-MM`.
-Errors are `{"error": "message"}` with: 400 bad input shape, 401 not signed in / signed out, 403 not allowed,
-404 not found (including workspaces you aren't a member of), 409 conflict, 422 validation.
-
-## Screen → endpoint map
-
-| Screen element | Call |
+| Topic | Rule |
 |---|---|
-| Sign in | `POST /auth/login` `{email, password}` |
-| Create an account | `POST /auth/register` `{name?, email, password}` (password ≥ 8 chars) |
-| Sidebar user card (`U`, name, email) | `GET /auth/me` → `{user: {id, name, email, initials}}` |
-| Sign out | `POST /auth/logout`, then delete the token in the browser |
-| Workspace dropdown ("Personal") | `GET /workspaces` → `[{id, name, kind, role, member_count, currency}]`, personal first |
-| + Create a team | `POST /workspaces` `{name}` |
-| Breadcrumb / "NGN ledger" | `workspace.name`, `workspace.currency` from `GET /workspaces/<id>` |
-| Month picker + all Overview cards | `GET /reports/monthly?month=2026-10` (one call, see below) |
-| Total spent / "6 expenses in 2026-10" | `total`, `expense_count` |
-| Monthly budget / "Not set" | `overall_budget` (`null` → show "Not set") |
-| Set a monthly budget | `PUT /budgets` `{limit: "600000"}` |
-| Budget remaining | `overall_budget.remaining`, `overall_budget.used_pct`, `overall_budget.status` (`ok`/`warning`/`over`) |
-| Daily spending chart | `daily` — one entry per day of the month, zero-filled |
-| By category chart / "5 categories" | `by_category` (sorted, with `share_pct`), `by_category.length` |
-| Export CSV | `GET /expenses/export?<same filters as list>` → file. Read the name from `Content-Disposition` |
-| Add expense | `POST /expenses` `{category_id, amount, spent_on?, description?}` |
-| Expenses page | `GET /expenses?page&per_page&start_date&end_date&category_id&min_amount&max_amount&q&sort&created_by` |
-| Edit / delete expense | `PATCH /expenses/<id>`, `DELETE /expenses/<id>` |
-| Budgets page | `GET /budgets`, `PUT /budgets` `{category_id?, limit}`, `DELETE /budgets/<id>`; live status in `GET /reports/monthly` → `budgets[]` |
-| Analytics page | `GET /reports/trend?months=6` + `GET /reports/monthly` |
-| Category picker | `GET /categories`; manage with `POST`/`PATCH`/`DELETE /categories/<id>` |
+| Base path | Everything under `/api`, except `GET /health`. Nginx sends `/api/*` and `/health` to Flask on port 5000. No CORS. |
+| Format | JSON, UTF-8. Dates `YYYY-MM-DD`, months `YYYY-MM`, IDs integers. |
+| Money | JSON **number**, at most 2 decimals, e.g. `120.5`. Stored as `NUMERIC(12,2)`. NGN only, no currency field. |
+| Auth | Login/register return `token`. Send `Authorization: Bearer <token>`. Lifetime 24 h. |
+| Errors | Always `{"error": "message"}`. 400 malformed JSON, 401 not signed in / wrong credentials, 404 not found, 409 email taken, 422 validation. |
+| Isolation | Another user's expense returns **404**, never 403. |
+| Sorting | Expenses: newest `date` first, then newest `id`. |
 
-## Response shapes
+## Endpoints
 
-`POST /auth/login` and `POST /auth/register`
+| Method | Path | Body | Success | Errors |
+|---|---|---|---|---|
+| POST | `/api/auth/register` | `{"email","password"}` | 201 `{"token","user":{"id","email"}}` | 409, 422 |
+| POST | `/api/auth/login` | `{"email","password"}` | 200 `{"token","user":{"id","email"}}` | 401 |
+| GET | `/api/expenses?category=&start_date=&end_date=` | none | 200 array of expenses | 401, 422 |
+| POST | `/api/expenses` | `{"date","category","description","amount"}` | 201 the expense | 422 |
+| PUT | `/api/expenses/<id>` | all four fields (full replace) | 200 the expense | 404, 422 |
+| DELETE | `/api/expenses/<id>` | none | 204, no body | 404 |
+| GET | `/api/expenses/export?category=&start_date=&end_date=` | none | 200 `text/csv`: `date,category,description,amount` | 401, 422 |
+| GET | `/api/categories` | none | 200 `["Food","Transport",...]` | 401 |
+| GET | `/api/budgets?month=YYYY-MM` | none | 200 `{"month","limit"}`, `limit` is `null` if not set | 422 |
+| PUT | `/api/budgets` | `{"month","limit"}` | 200 `{"month","limit"}` | 422 |
+| GET | `/health` | none | 200 `{"status":"ok","database":"ok"}` | 503 `{"status":"error","database":"down"}` |
+
+Expense object:
 ```json
-{"user": {"id": 1, "name": "Demo User", "email": "demo@example.com", "initials": "DU"},
- "access_token": "eyJ...", "default_workspace_id": 1}
+{ "id": 7, "date": "2026-10-05", "category": "Food", "description": "Weekly grocery shopping", "amount": 12050.5 }
 ```
 
-`GET /reports/monthly?month=2026-10`
-```json
-{"workspace": {"id": 1, "name": "Personal", "kind": "personal", "currency": "NGN"},
- "month": "2026-10", "currency": "NGN", "total": "57600.00", "expense_count": 6,
- "overall_budget": {"id": 3, "category": null, "limit": "600000.00", "spent": "57600.00",
-                    "remaining": "542400.00", "used_pct": 9.6, "status": "ok"},
- "by_category": [{"category": {"id": 1, "name": "Food", "color": "#2a78d6"}, "total": "22000.00", "count": 2, "share_pct": 38.2}],
- "daily": [{"date": "2026-10-01", "total": "0.00"}, {"date": "2026-10-02", "total": "22000.00"}],
- "budgets": [ /* overall first, then per-category, same shape as overall_budget */ ]}
-```
+## Validation
 
-`GET /expenses`
-```json
-{"expenses": [{"id": 7, "amount": "1500.50", "description": "Lunch", "spent_on": "2026-10-05",
-               "category": {"id": 1, "name": "Food", "color": "#2a78d6"},
-               "created_by": {"id": 1, "name": "Demo User"}}],
- "page": 1, "per_page": 25, "total_items": 6, "total_pages": 1, "total_amount": "57600.00"}
-```
-
-## Teams
-
-| Call | Who |
+| Field | Rule |
 |---|---|
-| `GET /workspaces/<id>/members` | any member |
-| `POST /workspaces/<id>/members` `{email}` | owner. The person must already have an account (no email invites) |
-| `DELETE /workspaces/<id>/members/<user_id>` | owner removes others; a member can remove themselves (leave) |
-| `PATCH /workspaces/<id>` `{name}`, `DELETE /workspaces/<id>` | owner. The Personal workspace can't be deleted |
+| email | Valid format, max 254 chars, unique case-insensitive (stored lower-cased) |
+| password | 8 to 128 characters, bcrypt-hashed, never returned |
+| description | Required, trimmed, 1 to 140 characters |
+| amount, limit | Number > 0, at most 2 decimals, max 9999999999.99 |
+| date | Valid calendar date `YYYY-MM-DD` |
+| category | `Food`, `Transport`, `Shopping`, `Utilities`, `Health`, `Entertainment`, `Education`, `Other` (exact case) |
+| month | `YYYY-MM`, month 01 to 12 |
 
-In a team, any member can add expenses, categories and budgets, but **members can only edit or delete
-their own expenses**. The owner can edit or delete any.
+## Clarifications (the contract doesn't specify these)
 
-<!-- ## Frontend wiring (React/Vite)
-
-```js
-// api.js
-const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5000/api";
-
-export async function api(path, { workspaceId, ...opts } = {}) {
-  const token = sessionStorage.getItem("token");
-  const res = await fetch(BASE + path, {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...(workspaceId && { "X-Workspace-Id": String(workspaceId) }),
-      ...opts.headers,
-    },
-  });
-  if (res.status === 401) { sessionStorage.removeItem("token"); window.location.assign("/login"); }
-  if (res.status === 204) return null;
-  const body = res.headers.get("content-type")?.includes("json") ? await res.json() : res;
-  if (!res.ok) throw new Error(body.error ?? res.statusText);
-  return body;
-}
-``` -->
+1. **`amount` and `limit` must be JSON numbers.** `"120.5"` (a string) gets 422. Send `Number(input)` from form fields.
+2. **`GET /api/budgets` without `month`** returns 422, same as a bad month.
+3. **Unknown category in a filter** (`?category=Pets`) returns 422, not an empty list. `All` and empty mean no filter.
+4. **Category is case-sensitive.** `food` gets 422; use the exact values from `GET /api/categories`.
+5. **Login with a missing or non-string email or password** returns 401 (wrong credentials), not 422.
+6. **PUT on someone else's or a missing expense** returns 404 before the body is validated.
+7. **No future-date rule.** The contract doesn't forbid future dates, so they're accepted.
+8. **CSV**: amounts are written with 2 decimals (`1500.50`), no currency symbol. A description starting with `= + - @`
+   gets a leading `'` so spreadsheets don't run it as a formula.
+9. **Unknown routes** return 404 `{"error":"Not found"}`; a wrong method returns 405 `{"error":"Method not allowed"}`.

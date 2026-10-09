@@ -1,8 +1,8 @@
 {
   "info": {
-    "name": "Expense Tracker API",
+    "name": "SpendWise API (Contract v1.0)",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Run Auth > Register (or Login) first; the token is saved and used everywhere. Requests act on your Personal workspace unless they send an X-Workspace-Id header."
+    "description": "Run in order: Auth > Register saves the token. Set baseUrl to the Nginx address (e.g. http://localhost) or Flask directly (http://127.0.0.1:5000)."
   },
   "event": [
     {
@@ -10,10 +10,9 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "const d = new Date(); const pad = n => String(n).padStart(2, \"0\");",
-          "const today = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;",
-          "pm.collectionVariables.set(\"today\", today);",
-          "pm.collectionVariables.set(\"month\", today.slice(0, 7));",
+          "const d = new Date(), p = n => String(n).padStart(2, \"0\");",
+          "const today = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;",
+          "pm.collectionVariables.set(\"today\", today); pm.collectionVariables.set(\"month\", today.slice(0, 7));",
           "pm.collectionVariables.set(\"monthStart\", today.slice(0, 7) + \"-01\");",
           "if (!pm.collectionVariables.get(\"email\")) pm.collectionVariables.set(\"email\", `postman${Date.now()}@example.com`);"
         ]
@@ -23,7 +22,7 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:5000"
+      "value": "http://127.0.0.1:5000"
     },
     {
       "key": "token",
@@ -32,55 +31,52 @@
     {
       "key": "email",
       "value": ""
-    },
-    {
-      "key": "categoryId",
-      "value": ""
-    },
-    {
-      "key": "expenseId",
-      "value": ""
     }
   ],
   "item": [
     {
-      "name": "Health check",
-      "event": [
+      "name": "Health",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": {
-          "raw": "{{baseUrl}}/api/health",
-          "host": [
-            "{{baseUrl}}"
+          "name": "Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Body\", () => pm.expect(pm.response.json()).to.eql({status: \"ok\", database: \"ok\"}));"
+                ]
+              }
+            }
           ],
-          "path": [
-            "api",
-            "health"
-          ]
-        },
-        "auth": {
-          "type": "noauth"
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
         }
-      }
+      ]
     },
     {
-      "name": "1. Auth",
+      "name": "Auth",
       "item": [
         {
           "name": "Register",
@@ -90,9 +86,9 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Created (201), or already exists (409) on a re-run\", () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));",
-                  "const j = pm.response.json(); if (j.access_token) pm.collectionVariables.set(\"token\", j.access_token);",
-                  "if (pm.response.json().default_workspace_id) pm.collectionVariables.set(\"personalWorkspaceId\", pm.response.json().default_workspace_id);"
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "const j = pm.response.json(); if (j.token) pm.collectionVariables.set(\"token\", j.token);",
+                  "pm.test(\"Has token and user\", () => { pm.expect(j).to.have.keys(\"token\", \"user\"); });"
                 ]
               }
             }
@@ -118,7 +114,54 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Postman User\",\n  \"email\": \"{{email}}\",\n  \"password\": \"password123\"\n}",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"password123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Register again (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"Error shape\", () => pm.expect(pm.response.json()).to.have.keys(\"error\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"password123\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -138,9 +181,9 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
-                  "const j = pm.response.json(); if (j.access_token) pm.collectionVariables.set(\"token\", j.access_token);",
-                  "if (pm.response.json().default_workspace_id) pm.collectionVariables.set(\"personalWorkspaceId\", pm.response.json().default_workspace_id);"
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json(); if (j.token) pm.collectionVariables.set(\"token\", j.token);",
+                  "pm.test(\"Has token and user\", () => { pm.expect(j).to.have.keys(\"token\", \"user\"); });"
                 ]
               }
             }
@@ -179,111 +222,15 @@
           }
         },
         {
-          "name": "Me",
+          "name": "Login wrong password (401)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "me"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Update profile name",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "me"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Postman Tester\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Login - wrong password (expect 401)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));"
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Error shape\", () => pm.expect(pm.response.json()).to.have.keys(\"error\"));"
                 ]
               }
             }
@@ -324,405 +271,7 @@
       ]
     },
     {
-      "name": "2. Workspaces & teams",
-      "item": [
-        {
-          "name": "List workspaces (sidebar switcher)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/workspaces",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "workspaces"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Create team",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 201\", () => pm.response.to.have.status(201));",
-                  "pm.collectionVariables.set(\"teamId\", pm.response.json().workspace.id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/workspaces",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "workspaces"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Flatmates\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Rename team",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/workspaces/{{teamId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "workspaces",
-                "{{teamId}}"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Flatmates 2026\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "List team members",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/workspaces/{{teamId}}/members",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "workspaces",
-                "{{teamId}}",
-                "members"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Add member by email (expect 404 - no such account)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 404\", () => pm.response.to.have.status(404));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/workspaces/{{teamId}}/members",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "workspaces",
-                "{{teamId}}",
-                "members"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"nobody@example.com\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Team expenses (X-Workspace-Id header)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "X-Workspace-Id",
-                "value": "{{teamId}}"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/expenses",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "expenses"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Team monthly summary",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "X-Workspace-Id",
-                "value": "{{teamId}}"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/reports/monthly?month={{month}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "reports",
-                "monthly"
-              ],
-              "query": [
-                {
-                  "key": "month",
-                  "value": "{{month}}"
-                }
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Delete team",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 204\", () => pm.response.to.have.status(204));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/workspaces/{{teamId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "workspaces",
-                "{{teamId}}"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        }
-      ]
-    },
-    {
-      "name": "3. Categories",
+      "name": "Categories",
       "item": [
         {
           "name": "List categories",
@@ -732,8 +281,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
-                  "const c = pm.response.json().categories; pm.collectionVariables.set(\"categoryId\", c.find(x => x.name === \"Food\").id); pm.collectionVariables.set(\"otherCategoryId\", c.find(x => x.name === \"Other\").id);"
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Fixed list\", () => pm.expect(pm.response.json()).to.eql([\"Food\",\"Transport\",\"Shopping\",\"Utilities\",\"Health\",\"Entertainment\",\"Education\",\"Other\"]));"
                 ]
               }
             }
@@ -767,161 +316,11 @@
               ]
             }
           }
-        },
-        {
-          "name": "Create category",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 201\", () => pm.response.to.have.status(201));",
-                  "pm.collectionVariables.set(\"newCategoryId\", pm.response.json().category.id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/categories",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "categories"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Pets {{$randomInt}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Rename category",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/categories/{{newCategoryId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "categories",
-                "{{newCategoryId}}"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Pet care {{$randomInt}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Delete category",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 204\", () => pm.response.to.have.status(204));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/categories/{{newCategoryId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "categories",
-                "{{newCategoryId}}"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
         }
       ]
     },
     {
-      "name": "4. Expenses",
+      "name": "Expenses",
       "item": [
         {
           "name": "Create expense",
@@ -931,8 +330,9 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 201\", () => pm.response.to.have.status(201));",
-                  "pm.collectionVariables.set(\"expenseId\", pm.response.json().expense.id);"
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "pm.test(\"Expense shape, amount is a number\", () => { const e = pm.response.json(); pm.expect(e).to.have.keys(\"id\",\"date\",\"category\",\"description\",\"amount\"); pm.expect(e.amount).to.be.a(\"number\"); });",
+                  "pm.collectionVariables.set(\"expenseId\", pm.response.json().id);"
                 ]
               }
             }
@@ -957,7 +357,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"category_id\": \"{{categoryId}}\",\n  \"amount\": \"1500.50\",\n  \"description\": \"Lunch\",\n  \"spent_on\": \"{{today}}\"\n}",
+              "raw": "{\n  \"date\": \"{{today}}\",\n  \"category\": \"Food\",\n  \"description\": \"Weekly grocery shopping\",\n  \"amount\": 12050.5\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -977,14 +377,15 @@
           }
         },
         {
-          "name": "Get expense",
+          "name": "List expenses (plain array)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Is array\", () => pm.expect(pm.response.json()).to.be.an(\"array\"));"
                 ]
               }
             }
@@ -998,14 +399,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/expenses/{{expenseId}}",
+              "raw": "{{baseUrl}}/api/expenses",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "expenses",
-                "{{expenseId}}"
+                "expenses"
               ]
             },
             "auth": {
@@ -1021,67 +421,14 @@
           }
         },
         {
-          "name": "Update expense",
+          "name": "Filter category=Food + dates",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/expenses/{{expenseId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "expenses",
-                "{{expenseId}}"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"amount\": \"2000\",\n  \"description\": \"Lunch with team\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "List expenses",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
                 ]
               }
             }
@@ -1095,7 +442,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/expenses?page=1&per_page=25",
+              "raw": "{{baseUrl}}/api/expenses?category=Food&start_date={{monthStart}}&end_date={{today}}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1105,12 +452,16 @@
               ],
               "query": [
                 {
-                  "key": "page",
-                  "value": "1"
+                  "key": "category",
+                  "value": "Food"
                 },
                 {
-                  "key": "per_page",
-                  "value": "25"
+                  "key": "start_date",
+                  "value": "{{monthStart}}"
+                },
+                {
+                  "key": "end_date",
+                  "value": "{{today}}"
                 }
               ]
             },
@@ -1127,14 +478,14 @@
           }
         },
         {
-          "name": "Filter by date + category",
+          "name": "Filter category=All",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
                 ]
               }
             }
@@ -1148,7 +499,57 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/expenses?start_date={{monthStart}}&end_date={{today}}&category_id={{categoryId}}",
+              "raw": "{{baseUrl}}/api/expenses?category=All",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "expenses"
+              ],
+              "query": [
+                {
+                  "key": "category",
+                  "value": "All"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Bad dates (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error shape\", () => pm.expect(pm.response.json()).to.have.keys(\"error\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses?start_date=2026-10-05&end_date=2026-10-01",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1159,15 +560,11 @@
               "query": [
                 {
                   "key": "start_date",
-                  "value": "{{monthStart}}"
+                  "value": "2026-10-05"
                 },
                 {
                   "key": "end_date",
-                  "value": "{{today}}"
-                },
-                {
-                  "key": "category_id",
-                  "value": "{{categoryId}}"
+                  "value": "2026-10-01"
                 }
               ]
             },
@@ -1184,20 +581,21 @@
           }
         },
         {
-          "name": "Filter by amount + search + sort",
+          "name": "Replace expense (PUT)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Expense shape, amount is a number\", () => { const e = pm.response.json(); pm.expect(e).to.have.keys(\"id\",\"date\",\"category\",\"description\",\"amount\"); pm.expect(e.amount).to.be.a(\"number\"); });"
                 ]
               }
             }
           ],
           "request": {
-            "method": "GET",
+            "method": "PUT",
             "header": [
               {
                 "key": "Content-Type",
@@ -1205,32 +603,130 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/expenses?min_amount=1000&max_amount=5000&q=lunch&sort=-amount",
+              "raw": "{{baseUrl}}/api/expenses/{{expenseId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "expenses",
+                "{{expenseId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"{{today}}\",\n  \"category\": \"Transport\",\n  \"description\": \"Bus fare\",\n  \"amount\": 300\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Invalid expense (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error shape\", () => pm.expect(pm.response.json()).to.have.keys(\"error\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
                 "expenses"
-              ],
-              "query": [
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"{{today}}\",\n  \"category\": \"Food\",\n  \"description\": \"Weekly grocery shopping\",\n  \"amount\": -5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
                 {
-                  "key": "min_amount",
-                  "value": "1000"
-                },
-                {
-                  "key": "max_amount",
-                  "value": "5000"
-                },
-                {
-                  "key": "q",
-                  "value": "lunch"
-                },
-                {
-                  "key": "sort",
-                  "value": "-amount"
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "Malformed JSON (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Error shape\", () => pm.expect(pm.response.json()).to.have.keys(\"error\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "expenses"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{bad json",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "auth": {
               "type": "bearer",
@@ -1252,8 +748,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"Is CSV\", () => pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"text/csv\"));"
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"CSV header\", () => pm.expect(pm.response.text().split(\"\\n\")[0]).to.eql(\"date,category,description,amount\"));"
                 ]
               }
             }
@@ -1267,7 +763,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/expenses/export?start_date={{monthStart}}&end_date={{today}}",
+              "raw": "{{baseUrl}}/api/expenses/export?category=All",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1278,12 +774,8 @@
               ],
               "query": [
                 {
-                  "key": "start_date",
-                  "value": "{{monthStart}}"
-                },
-                {
-                  "key": "end_date",
-                  "value": "{{today}}"
+                  "key": "category",
+                  "value": "All"
                 }
               ]
             },
@@ -1300,20 +792,20 @@
           }
         },
         {
-          "name": "Create expense - invalid amount (expect 422)",
+          "name": "Delete expense",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));"
+                  "pm.test(\"Status 204\", () => pm.response.to.have.status(204));"
                 ]
               }
             }
           ],
           "request": {
-            "method": "POST",
+            "method": "DELETE",
             "header": [
               {
                 "key": "Content-Type",
@@ -1321,23 +813,60 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/expenses",
+              "raw": "{{baseUrl}}/api/expenses/{{expenseId}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "expenses"
+                "expenses",
+                "{{expenseId}}"
               ]
             },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"category_id\": \"{{categoryId}}\",\n  \"amount\": \"-5\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
                 }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete again (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"Error shape\", () => pm.expect(pm.response.json()).to.have.keys(\"error\"));"
+                ]
               }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses/{{expenseId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "expenses",
+                "{{expenseId}}"
+              ]
             },
             "auth": {
               "type": "bearer",
@@ -1354,17 +883,68 @@
       ]
     },
     {
-      "name": "5. Budgets",
+      "name": "Budgets",
       "item": [
         {
-          "name": "Set overall monthly budget",
+          "name": "Get budget (limit null)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200 or 201\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Null limit\", () => pm.expect(pm.response.json()).to.eql({month: \"2001-01\", limit: null}));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/budgets?month=2001-01",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "budgets"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "2001-01"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set budget",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Body\", () => pm.expect(pm.response.json()).to.eql({month: pm.collectionVariables.get(\"month\"), limit: 600000}));"
                 ]
               }
             }
@@ -1389,7 +969,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"limit\": \"600000\"\n}",
+              "raw": "{\n  \"month\": \"{{month}}\",\n  \"limit\": 600000\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1409,67 +989,14 @@
           }
         },
         {
-          "name": "Set category budget",
+          "name": "Get budget",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200 or 201\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
-                  "pm.collectionVariables.set(\"budgetId\", pm.response.json().budget.id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "PUT",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/budgets",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "budgets"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"category_id\": \"{{categoryId}}\",\n  \"limit\": \"180000\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "List budgets",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
                 ]
               }
             }
@@ -1483,62 +1010,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/budgets",
+              "raw": "{{baseUrl}}/api/budgets?month={{month}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
                 "budgets"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        }
-      ]
-    },
-    {
-      "name": "6. Reports",
-      "item": [
-        {
-          "name": "Monthly summary",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/reports/monthly?month={{month}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "reports",
-                "monthly"
               ],
               "query": [
                 {
@@ -1560,14 +1038,15 @@
           }
         },
         {
-          "name": "6-month trend",
+          "name": "Bad month (422)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Error shape\", () => pm.expect(pm.response.json()).to.have.keys(\"error\"));"
                 ]
               }
             }
@@ -1581,19 +1060,18 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/reports/trend?months=6",
+              "raw": "{{baseUrl}}/api/budgets?month=2026-13",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "reports",
-                "trend"
+                "budgets"
               ],
               "query": [
                 {
-                  "key": "months",
-                  "value": "6"
+                  "key": "month",
+                  "value": "2026-13"
                 }
               ]
             },
@@ -1612,105 +1090,18 @@
       ]
     },
     {
-      "name": "7. Cleanup",
+      "name": "Auth errors",
       "item": [
         {
-          "name": "Delete expense",
+          "name": "No token (401)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status is 204\", () => pm.response.to.have.status(204));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/expenses/{{expenseId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "expenses",
-                "{{expenseId}}"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Delete budget",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 204\", () => pm.response.to.have.status(204));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/budgets/{{budgetId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "budgets",
-                "{{budgetId}}"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Get deleted expense (expect 404)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 404\", () => pm.response.to.have.status(404));"
+                  "pm.test(\"Status 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Error shape\", () => pm.expect(pm.response.json()).to.have.keys(\"error\"));"
                 ]
               }
             }
@@ -1724,113 +1115,17 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/expenses/{{expenseId}}",
+              "raw": "{{baseUrl}}/api/expenses",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "expenses",
-                "{{expenseId}}"
+                "expenses"
               ]
             },
             "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Sign out",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 204\", () => pm.response.to.have.status(204));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/logout",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "logout"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Use token after sign out (expect 401)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "me"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
+              "type": "noauth"
             }
           }
         }

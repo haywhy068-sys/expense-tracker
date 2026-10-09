@@ -1,75 +1,89 @@
+"""Input parsing for the contract's rules. Every failure raises a JSON error response."""
+import json
+import re
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
-from flask import abort, jsonify, make_response
+from flask import abort, jsonify, make_response, request
 
-MAX_AMOUNT_MINOR = 10**13  # 100 billion in major units; a sanity cap, not a business rule
+from .models import CATEGORIES
+
+MAX_MONEY = Decimal("9999999999.99")  # NUMERIC(12,2)
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
-def fail(message, status=422, **extra):
-    abort(make_response(jsonify({"error": message, **extra}), status))
+def fail(message, status=422):
+    abort(make_response(jsonify(error=message), status))
 
 
-def require_json(request):
-    data = request.get_json(silent=True)
+def json_body() -> dict:
+    """Parse the body with decimals kept exact (120.1 stays 120.1, never a float). 400 if malformed."""
+    try:
+        data = json.loads(request.get_data(as_text=True) or "null", parse_float=Decimal)
+    except (ValueError, UnicodeDecodeError):
+        fail("Malformed JSON", 400)
     if not isinstance(data, dict):
         fail("Request body must be a JSON object", 400)
     return data
 
 
-def parse_amount(value, field="amount"):
-    """Accepts '1500', '1500.5', 1500.50 -> integer minor units. Rejects >2 decimals and <= 0."""
-    if isinstance(value, bool) or value is None:
-        fail(f"{field} is required")
-    try:
-        dec = Decimal(str(value))
-    except InvalidOperation:
+def money(value, field):
+    """A JSON number > 0 with at most 2 decimals, max 9999999999.99. Strings and booleans are rejected."""
+    if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
         fail(f"{field} must be a number")
-    if not dec.is_finite():
-        fail(f"{field} must be a number")
-    if dec <= 0:
+    dec = Decimal(value)
+    if not dec.is_finite() or dec <= 0:
         fail(f"{field} must be greater than 0")
     if dec != dec.quantize(Decimal("0.01")):
         fail(f"{field} can have at most 2 decimal places")
-    minor = int(dec * 100)
-    if minor > MAX_AMOUNT_MINOR:
-        fail(f"{field} is too large")
-    return minor
+    if dec > MAX_MONEY:
+        fail(f"{field} must be at most 9999999999.99")
+    return dec.quantize(Decimal("0.01"))
 
 
-def parse_date(value, field="date", required=True):
+def iso_date(value, field, required=True):
     if value in (None, ""):
         if required:
             fail(f"{field} is required")
         return None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        fail(f"{field} must be a valid date (YYYY-MM-DD)")
     try:
-        return date.fromisoformat(str(value))
+        return date.fromisoformat(value)
     except ValueError:
-        fail(f"{field} must be YYYY-MM-DD")
+        fail(f"{field} must be a valid date (YYYY-MM-DD)")
 
 
-def parse_month(value):
-    """'2026-10' -> (first_day, first_day_of_next_month). Defaults to current month."""
-    if not value:
-        today = date.today()
-        y, m = today.year, today.month
-    else:
-        try:
-            y, m = (int(p) for p in str(value).split("-"))
-            date(y, m, 1)
-        except (ValueError, TypeError):
-            fail("month must be YYYY-MM")
-    start = date(y, m, 1)
-    end = date(y + (m == 12), 1 if m == 12 else m + 1, 1)
-    return start, end
+def month(value):
+    if not isinstance(value, str) or not MONTH_RE.match(value):
+        fail("month must be YYYY-MM")
+    return value
 
 
-def parse_int(value, field, required=False):
-    if value in (None, ""):
-        if required:
-            fail(f"{field} is required")
-        return None
-    try:
-        return int(value)
-    except (ValueError, TypeError):
-        fail(f"{field} must be an integer")
+def category(value):
+    if value not in CATEGORIES:
+        fail("category must be one of: " + ", ".join(CATEGORIES))
+    return value
+
+
+def description(value):
+    if not isinstance(value, str) or not value.strip():
+        fail("description is required")
+    value = value.strip()
+    if len(value) > 140:
+        fail("description must be at most 140 characters")
+    return value
+
+
+def email(value):
+    value = value.strip().lower() if isinstance(value, str) else ""
+    if not value or len(value) > 254 or not EMAIL_RE.match(value):
+        fail("A valid email is required (max 254 characters)")
+    return value
+
+
+def password(value):
+    if not isinstance(value, str) or not 8 <= len(value) <= 128:
+        fail("password must be 8 to 128 characters")
+    return value

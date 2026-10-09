@@ -1,133 +1,52 @@
 from datetime import datetime, timezone
 
-from werkzeug.security import check_password_hash, generate_password_hash
-
 from .extensions import db
+
+# Contract: fixed, read-only category list.
+CATEGORIES = ["Food", "Transport", "Shopping", "Utilities", "Health", "Entertainment", "Education", "Other"]
 
 
 def utcnow():
     return datetime.now(timezone.utc)
 
 
-def sum_minor(column):
-    """SUM of a money column as a whole number on every database.
-    Postgres returns SUM(bigint) as NUMERIC (Python Decimal); SQLite returns int. Cast so both give int."""
-    return db.cast(db.func.coalesce(db.func.sum(column), 0), db.BigInteger)
-
-
-def to_major(minor: int) -> str:
-    """Integer minor units (kobo/cents) -> '1234.50'. Never use floats for money."""
-    minor = int(minor)  # defensive: never format a Decimal/float as money
-    sign = "-" if minor < 0 else ""
-    minor = abs(minor)
-    return f"{sign}{minor // 100}.{minor % 100:02d}"
-
-
-# Fixed categorical order (CVD-validated palette). Colour follows the category,
-# assigned once at creation, never re-cycled by rank.
-PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
-DEFAULT_CATEGORIES = ["Food", "Transport", "Housing", "Utilities", "Health", "Entertainment", "Shopping", "Other"]
+def money(value):
+    """NUMERIC(12,2) -> JSON number (contract: money is a number in major units, never a string)."""
+    return None if value is None else float(value)
 
 
 class User(db.Model):
+    __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(80), nullable=False, default="")
-    email = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    email = db.Column(db.String(254), unique=True, nullable=False)  # stored lower-cased => case-insensitive
     password_hash = db.Column(db.String(255), nullable=False)
-    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
-
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, server_default=db.func.now())
 
     def to_dict(self):
-        initials = "".join(p[0] for p in self.name.split()[:2]).upper() or self.email[0].upper()
-        return {"id": self.id, "name": self.name, "email": self.email, "initials": initials}
-
-
-class Workspace(db.Model):
-    """Everything financial (categories, expenses, budgets) belongs to a workspace.
-    Every user gets one 'personal' workspace; 'team' workspaces are shared."""
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(80), nullable=False)
-    kind = db.Column(db.String(10), nullable=False, default="personal")  # personal | team
-    currency = db.Column(db.String(3), nullable=False, default="NGN")
-    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
-
-    def to_dict(self, role=None, member_count=None):
-        d = {"id": self.id, "name": self.name, "kind": self.kind, "currency": self.currency}
-        if role:
-            d["role"] = role
-        if member_count is not None:
-            d["member_count"] = member_count
-        return d
-
-
-class Membership(db.Model):
-    __table_args__ = (db.UniqueConstraint("workspace_id", "user_id", name="uq_membership"),)
-    id = db.Column(db.Integer, primary_key=True)
-    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
-    role = db.Column(db.String(10), nullable=False, default="member")  # owner | member
-    joined_at = db.Column(db.DateTime(timezone=True), default=utcnow)
-
-    workspace = db.relationship("Workspace")
-    user = db.relationship("User")
-
-
-class Category(db.Model):
-    __table_args__ = (db.UniqueConstraint("workspace_id", "name", name="uq_category_ws_name"),)
-    id = db.Column(db.Integer, primary_key=True)
-    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False, index=True)
-    name = db.Column(db.String(50), nullable=False)
-    color = db.Column(db.String(7), nullable=False)
-
-    def to_dict(self):
-        return {"id": self.id, "name": self.name, "color": self.color}
+        return {"id": self.id, "email": self.email}
 
 
 class Expense(db.Model):
+    __tablename__ = "expenses"
+    __table_args__ = (db.Index("ix_expenses_user_date", "user_id", "date"),)
     id = db.Column(db.Integer, primary_key=True)
-    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False, index=True)
-    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-    category_id = db.Column(db.Integer, db.ForeignKey("category.id"), nullable=False, index=True)
-    amount_minor = db.Column(db.BigInteger, nullable=False)
-    description = db.Column(db.String(255), nullable=False, default="")
-    spent_on = db.Column(db.Date, nullable=False, index=True)
-    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
-    updated_at = db.Column(db.DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-
-    category = db.relationship("Category")
-    author = db.relationship("User")
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    date = db.Column(db.Date, nullable=False)
+    category = db.Column(db.String(20), nullable=False)
+    description = db.Column(db.String(140), nullable=False)
+    amount = db.Column(db.Numeric(12, 2), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, server_default=db.func.now())
 
     def to_dict(self):
-        return {
-            "id": self.id,
-            "amount": to_major(self.amount_minor),
-            "description": self.description,
-            "spent_on": self.spent_on.isoformat(),
-            "category": self.category.to_dict(),
-            "created_by": {"id": self.author.id, "name": self.author.name},
-        }
+        return {"id": self.id, "date": self.date.isoformat(), "category": self.category,
+                "description": self.description, "amount": money(self.amount)}
 
 
 class Budget(db.Model):
-    """A recurring monthly limit. category_id NULL = overall monthly budget."""
+    __tablename__ = "budgets"
+    __table_args__ = (db.UniqueConstraint("user_id", "month", name="uq_budgets_user_month"),)
     id = db.Column(db.Integer, primary_key=True)
-    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False, index=True)
-    category_id = db.Column(db.Integer, db.ForeignKey("category.id", ondelete="CASCADE"), nullable=True)
-    amount_minor = db.Column(db.BigInteger, nullable=False)
-
-    category = db.relationship("Category")
-
-    def to_dict(self):
-        return {"id": self.id, "category": self.category.to_dict() if self.category else None,
-                "limit": to_major(self.amount_minor)}
-
-
-class RevokedToken(db.Model):
-    """Signed-out tokens. JWTs are stateless, so without this 'Sign out' only deletes the browser copy."""
-    jti = db.Column(db.String(36), primary_key=True)
-    revoked_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    month = db.Column(db.String(7), nullable=False)  # YYYY-MM
+    # "limit" is an SQL reserved word; SQLAlchemy quotes it. Hand-written SQL must write "limit".
+    limit = db.Column("limit", db.Numeric(12, 2), nullable=False)
